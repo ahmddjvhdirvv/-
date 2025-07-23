@@ -1,0 +1,581 @@
+import pygame
+import sys
+import random
+import math
+
+# تهيئة pygame
+pygame.init()
+pygame.font.init()
+
+# إعدادات الشاشة
+WIDTH, HEIGHT = 1000, 700
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("مغامرات البطل الشجاع")
+
+# الألوان
+BACKGROUND = (30, 30, 50)
+GROUND_COLOR = (45, 90, 45)
+SKY_COLOR = (100, 150, 255)
+RED = (220, 60, 60)
+GREEN = (60, 220, 60)
+BLUE = (60, 100, 220)
+YELLOW = (220, 220, 60)
+PURPLE = (180, 60, 220)
+WHITE = (250, 250, 250)
+BLACK = (20, 20, 20)
+GRAY = (150, 150, 150)
+
+# الخطوط
+font_large = pygame.font.SysFont("arial", 48, bold=True)
+font_medium = pygame.font.SysFont("arial", 32)
+font_small = pygame.font.SysFont("arial", 24)
+
+# فئة اللاعب
+class Player:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.width = 40
+        self.height = 60
+        self.speed = 5
+        self.jumping = False
+        self.jump_count = 10
+        self.health = 100
+        self.max_health = 100
+        self.direction = 1  # 1 لليمين, -1 لليسار
+        self.weapons = ["سيف", "قوس", "بلطة", "سيف ناري"]
+        self.current_weapon = 0
+        self.coins = 0
+        self.score = 0
+        self.level = 1
+        self.attack_cooldown = 0
+        self.attacking = False
+        self.attack_frame = 0
+
+    def move(self, keys, platforms):
+        if keys[pygame.K_LEFT]:
+            self.x -= self.speed
+            self.direction = -1
+        if keys[pygame.K_RIGHT]:
+            self.x += self.speed
+            self.direction = 1
+            
+        # التأكد من بقاء اللاعب داخل الشاشة
+        if self.x < 0:
+            self.x = 0
+        if self.x > WIDTH - self.width:
+            self.x = WIDTH - self.width
+            
+        # الجاذبية والقفز
+        if not self.jumping:
+            on_ground = False
+            for platform in platforms:
+                if (self.y + self.height >= platform.y and 
+                    self.y + self.height <= platform.y + 20 and
+                    self.x + self.width > platform.x and 
+                    self.x < platform.x + platform.width):
+                    on_ground = True
+                    self.y = platform.y - self.height
+                    break
+                    
+            if not on_ground:
+                self.y += 8
+                
+            if keys[pygame.K_SPACE] and on_ground:
+                self.jumping = True
+        else:
+            if self.jump_count >= -10:
+                neg = 1
+                if self.jump_count < 0:
+                    neg = -1
+                self.y -= (self.jump_count ** 2) * 0.3 * neg
+                self.jump_count -= 1
+            else:
+                self.jumping = False
+                self.jump_count = 10
+                
+        # التأكد من بقاء اللاعب داخل الشاشة عمودياً
+        if self.y < 0:
+            self.y = 0
+        if self.y > HEIGHT - self.height:
+            self.y = HEIGHT - self.height
+            self.jumping = False
+            self.jump_count = 10
+            
+        # تبريد الهجوم
+        if self.attack_cooldown > 0:
+            self.attack_cooldown -= 1
+            
+    def attack(self):
+        if self.attack_cooldown == 0:
+            self.attacking = True
+            self.attack_frame = 10
+            self.attack_cooldown = 20
+            return True
+        return False
+            
+    def draw(self, screen):
+        # رسم الجسم
+        pygame.draw.rect(screen, BLUE, (self.x, self.y, self.width, self.height))
+        
+        # رسم الرأس
+        pygame.draw.circle(screen, (200, 150, 100), (self.x + self.width//2, self.y - 10), 20)
+        
+        # رسم العيون
+        eye_x = self.x + self.width//2 + (5 * self.direction)
+        pygame.draw.circle(screen, WHITE, (eye_x, self.y - 15), 8)
+        pygame.draw.circle(screen, BLACK, (eye_x, self.y - 15), 4)
+        
+        # رسم الأسلحة عند الهجوم
+        if self.attacking:
+            self.attack_frame -= 1
+            if self.attack_frame <= 0:
+                self.attacking = False
+                
+            weapon_color = (200, 200, 200)
+            if self.weapons[self.current_weapon] == "سيف ناري":
+                weapon_color = (255, 100, 0)
+                
+            start_x = self.x + (self.width if self.direction == 1 else 0)
+            end_x = start_x + (60 * self.direction)
+            pygame.draw.line(screen, weapon_color, 
+                            (start_x, self.y + 20), 
+                            (end_x, self.y + 20), 
+                            8)
+        
+        # رسم شريط الصحة
+        pygame.draw.rect(screen, RED, (self.x, self.y - 40, self.width, 10))
+        pygame.draw.rect(screen, GREEN, (self.x, self.y - 40, self.width * (self.health/self.max_health), 10))
+        
+    def next_weapon(self):
+        self.current_weapon = (self.current_weapon + 1) % len(self.weapons)
+        
+    def prev_weapon(self):
+        self.current_weapon = (self.current_weapon - 1) % len(self.weapons)
+        
+    def get_weapon_name(self):
+        return self.weapons[self.current_weapon]
+
+# فئة العدو
+class Enemy:
+    def __init__(self, x, y, enemy_type):
+        self.x = x
+        self.y = y
+        self.width = 40
+        self.height = 40
+        self.speed = random.randint(1, 3)
+        self.direction = random.choice([-1, 1])
+        self.health = 30
+        self.max_health = 30
+        self.enemy_type = enemy_type
+        self.attack_cooldown = 0
+        
+    def move(self, player_x):
+        # تحرك باتجاه اللاعب
+        if self.x < player_x:
+            self.x += self.speed
+            self.direction = 1
+        elif self.x > player_x:
+            self.x -= self.speed
+            self.direction = -1
+            
+        # حركة عشوائية أحياناً
+        if random.random() < 0.02:
+            self.direction = random.choice([-1, 1])
+            
+        self.x += self.direction * self.speed
+        
+        # التأكد من بقاء العدو داخل الشاشة
+        if self.x < 0:
+            self.x = 0
+            self.direction = 1
+        if self.x > WIDTH - self.width:
+            self.x = WIDTH - self.width
+            self.direction = -1
+            
+        # تبريد الهجوم
+        if self.attack_cooldown > 0:
+            self.attack_cooldown -= 1
+            
+    def attack(self):
+        if self.attack_cooldown == 0:
+            self.attack_cooldown = 60
+            return True
+        return False
+            
+    def draw(self, screen):
+        # رسم الجسم بناءً على نوع العدو
+        if self.enemy_type == "غول":
+            color = (150, 50, 50)
+        elif self.enemy_type == "وحش":
+            color = (50, 150, 50)
+        else:
+            color = (50, 50, 150)
+            
+        pygame.draw.rect(screen, color, (self.x, self.y, self.width, self.height))
+        
+        # رسم العيون
+        eye_x = self.x + self.width//2 + (5 * self.direction)
+        pygame.draw.circle(screen, WHITE, (eye_x, self.y + 10), 8)
+        pygame.draw.circle(screen, RED, (eye_x, self.y + 10), 4)
+        
+        # رسم شريط الصحة
+        pygame.draw.rect(screen, RED, (self.x, self.y - 20, self.width, 5))
+        pygame.draw.rect(screen, GREEN, (self.x, self.y - 20, self.width * (self.health/self.max_health), 5))
+
+# فئة المنصة
+class Platform:
+    def __init__(self, x, y, width, height):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        
+    def draw(self, screen):
+        pygame.draw.rect(screen, GROUND_COLOR, (self.x, self.y, self.width, self.height))
+        # إضافة تفاصيل للمنصة
+        for i in range(0, self.width, 20):
+            pygame.draw.line(screen, (35, 80, 35), (self.x + i, self.y), (self.x + i, self.y + self.height), 2)
+
+# فئة العملة
+class Coin:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.width = 20
+        self.height = 20
+        self.collected = False
+        
+    def draw(self, screen):
+        if not self.collected:
+            pygame.draw.circle(screen, YELLOW, (self.x + self.width//2, self.y + self.height//2), 10)
+            pygame.draw.circle(screen, (200, 170, 0), (self.x + self.width//2, self.y + self.height//2), 8)
+            pygame.draw.circle(screen, YELLOW, (self.x + self.width//2, self.y + self.height//2), 5)
+
+# فئة السلاح
+class WeaponPickup:
+    def __init__(self, x, y, weapon_name):
+        self.x = x
+        self.y = y
+        self.width = 30
+        self.height = 30
+        self.weapon_name = weapon_name
+        self.collected = False
+        
+    def draw(self, screen):
+        if not self.collected:
+            color = GRAY
+            if self.weapon_name == "قوس":
+                color = GREEN
+            elif self.weapon_name == "بلطة":
+                color = BLUE
+            elif self.weapon_name == "سيف ناري":
+                color = RED
+                
+            pygame.draw.rect(screen, color, (self.x, self.y, self.width, self.height), 0, 5)
+            pygame.draw.rect(screen, WHITE, (self.x, self.y, self.width, self.height), 2, 5)
+
+# فئة القلعة
+class Castle:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.width = 120
+        self.height = 150
+        
+    def draw(self, screen):
+        # قاعدة القلعة
+        pygame.draw.rect(screen, GRAY, (self.x, self.y + 50, self.width, 100))
+        
+        # أبراج القلعة
+        pygame.draw.rect(screen, (100, 100, 100), (self.x - 10, self.y, 30, 60))
+        pygame.draw.rect(screen, (100, 100, 100), (self.x + self.width - 20, self.y, 30, 60))
+        
+        # سقف القلعة
+        pygame.draw.polygon(screen, RED, [
+            (self.x - 15, self.y),
+            (self.x + self.width + 5, self.y),
+            (self.x + self.width//2, self.y - 50)
+        ])
+        
+        # بوابة القلعة
+        pygame.draw.rect(screen, (100, 50, 0), (self.x + self.width//2 - 20, self.y + 80, 40, 70))
+
+# إنشاء اللاعب
+player = Player(100, 300)
+
+# إنشاء المنصات
+platforms = [
+    Platform(0, HEIGHT - 50, WIDTH, 50),  # الأرض
+    Platform(200, HEIGHT - 150, 200, 30),
+    Platform(500, HEIGHT - 250, 200, 30),
+    Platform(300, HEIGHT - 350, 150, 30),
+    Platform(600, HEIGHT - 400, 200, 30),
+]
+
+# إنشاء الأعداء
+enemies = [
+    Enemy(400, HEIGHT - 90, "غول"),
+    Enemy(700, HEIGHT - 90, "وحش"),
+    Enemy(350, HEIGHT - 190, "غول"),
+    Enemy(550, HEIGHT - 290, "وحش"),
+    Enemy(650, HEIGHT - 440, "غول"),
+]
+
+# إنشاء العملات
+coins = []
+for i in range(15):
+    x = random.randint(50, WIDTH - 50)
+    y = random.randint(100, HEIGHT - 150)
+    coins.append(Coin(x, y))
+
+# إنشاء أسلحة للجمع
+weapon_pickups = [
+    WeaponPickup(250, HEIGHT - 200, "قوس"),
+    WeaponPickup(550, HEIGHT - 300, "بلطة"),
+    WeaponPickup(700, HEIGHT - 450, "سيف ناري"),
+]
+
+# إنشاء القلعة
+castle = Castle(WIDTH - 200, HEIGHT - 200)
+
+# السحاب
+clouds = []
+for i in range(10):
+    x = random.randint(0, WIDTH)
+    y = random.randint(20, 150)
+    speed = random.uniform(0.2, 0.8)
+    size = random.randint(30, 70)
+    clouds.append([x, y, speed, size])
+
+# الأشجار
+trees = []
+for i in range(5):
+    x = random.randint(50, WIDTH - 100)
+    y = HEIGHT - 60
+    trees.append([x, y])
+
+# رسائل اللعبة
+game_state = "playing"  # يمكن أن تكون "playing", "game_over", "level_complete"
+level_complete_time = 0
+
+# حلقة اللعبة الرئيسية
+clock = pygame.time.Clock()
+running = True
+
+while running:
+    # معالجة الأحداث
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                running = False
+            elif event.key == pygame.K_a and game_state == "playing":
+                player.attack()
+            elif event.key == pygame.K_w:
+                player.next_weapon()
+            elif event.key == pygame.K_q:
+                player.prev_weapon()
+            elif event.key == pygame.K_r and game_state != "playing":
+                # إعادة تشغيل اللعبة
+                player = Player(100, 300)
+                enemies = [
+                    Enemy(400, HEIGHT - 90, "غول"),
+                    Enemy(700, HEIGHT - 90, "وحش"),
+                    Enemy(350, HEIGHT - 190, "غول"),
+                    Enemy(550, HEIGHT - 290, "وحش"),
+                    Enemy(650, HEIGHT - 440, "غول"),
+                ]
+                coins = []
+                for i in range(15):
+                    x = random.randint(50, WIDTH - 50)
+                    y = random.randint(100, HEIGHT - 150)
+                    coins.append(Coin(x, y))
+                game_state = "playing"
+                player.level = 1
+                player.score = 0
+                player.coins = 0
+    
+    if game_state == "playing":
+        # حركة اللاعب
+        keys = pygame.key.get_pressed()
+        player.move(keys, platforms)
+        
+        # حركة الأعداء
+        for enemy in enemies:
+            enemy.move(player.x)
+            
+            # هجوم الأعداء
+            if (abs(enemy.x - player.x) < 50 and 
+                abs(enemy.y - player.y) < 50 and
+                enemy.attack()):
+                player.health -= 5
+                if player.health <= 0:
+                    game_state = "game_over"
+            
+            # هجوم اللاعب على الأعداء
+            if (player.attacking and 
+                abs(player.x - enemy.x) < 80 and 
+                abs(player.y - enemy.y) < 60 and
+                player.attack_frame > 8):
+                enemy.health -= 10
+                if enemy.health <= 0:
+                    enemies.remove(enemy)
+                    player.score += 100
+        
+        # جمع العملات
+        for coin in coins:
+            if (not coin.collected and 
+                player.x < coin.x + coin.width and 
+                player.x + player.width > coin.x and
+                player.y < coin.y + coin.height and 
+                player.y + player.height > coin.y):
+                coin.collected = True
+                player.coins += 1
+                player.score += 10
+        
+        # جمع الأسلحة
+        for weapon in weapon_pickups:
+            if (not weapon.collected and 
+                player.x < weapon.x + weapon.width and 
+                player.x + player.width > weapon.x and
+                player.y < weapon.y + weapon.height and 
+                player.y + player.height > weapon.y):
+                weapon.collected = True
+                if weapon.weapon_name not in player.weapons:
+                    player.weapons.append(weapon.weapon_name)
+                player.score += 50
+        
+        # فحص اكتمال المستوى (الوصول للقلعة)
+        if (player.x > castle.x - 50 and 
+            player.x < castle.x + castle.width + 50 and
+            player.y > castle.y - 50 and 
+            player.y < castle.y + castle.height):
+            game_state = "level_complete"
+            level_complete_time = pygame.time.get_ticks()
+    
+    # رسم الخلفية
+    screen.fill(SKY_COLOR)
+    
+    # رسم السحاب
+    for cloud in clouds:
+        cloud[0] += cloud[2]
+        if cloud[0] > WIDTH + 100:
+            cloud[0] = -100
+        pygame.draw.circle(screen, WHITE, (int(cloud[0]), int(cloud[1])), cloud[3])
+        pygame.draw.circle(screen, WHITE, (int(cloud[0]) + cloud[3] - 10, int(cloud[1]) + 10), cloud[3] - 10)
+        pygame.draw.circle(screen, WHITE, (int(cloud[0]) + cloud[3] + 10, int(cloud[1]) - 5), cloud[3] - 15)
+    
+    # رسم الأشجار
+    for tree in trees:
+        # جذع الشجرة
+        pygame.draw.rect(screen, (100, 50, 0), (tree[0] + 15, tree[1] - 80, 10, 80))
+        # أوراق الشجرة
+        pygame.draw.circle(screen, (0, 120, 0), (tree[0] + 20, tree[1] - 100), 25)
+    
+    # رسم القلعة
+    castle.draw(screen)
+    
+    # رسم المنصات
+    for platform in platforms:
+        platform.draw(screen)
+    
+    # رسم العملات
+    for coin in coins:
+        coin.draw(screen)
+    
+    # رسم الأسلحة
+    for weapon in weapon_pickups:
+        weapon.draw(screen)
+    
+    # رسم الأعداء
+    for enemy in enemies:
+        enemy.draw(screen)
+    
+    # رسم اللاعب
+    player.draw(screen)
+    
+    # رسم الواجهة
+    # شريط الصحة
+    pygame.draw.rect(screen, RED, (20, 20, 200, 25))
+    pygame.draw.rect(screen, GREEN, (20, 20, 200 * (player.health/player.max_health), 25))
+    pygame.draw.rect(screen, BLACK, (20, 20, 200, 25), 2)
+    health_text = font_small.render(f"الصحة: {int(player.health)}/{player.max_health}", True, WHITE)
+    screen.blit(health_text, (25, 22))
+    
+    # النقاط والعملات
+    score_text = font_small.render(f"النقاط: {player.score}", True, YELLOW)
+    screen.blit(score_text, (WIDTH - 200, 22))
+    
+    coin_text = font_small.render(f"العملات: {player.coins}", True, YELLOW)
+    screen.blit(coin_text, (WIDTH - 200, 52))
+    
+    # المستوى الحالي
+    level_text = font_small.render(f"المستوى: {player.level}", True, PURPLE)
+    screen.blit(level_text, (WIDTH // 2 - 50, 22))
+    
+    # السلاح الحالي
+    weapon_text = font_small.render(f"السلاح: {player.get_weapon_name()}", True, GREEN)
+    screen.blit(weapon_text, (WIDTH // 2 - 50, 52))
+    
+    # تعليمات التحكم
+    controls_text = font_small.render("أسهم للحركة، مسافة للقفز، A للهجوم، W/Q لتبديل السلاح", True, GRAY)
+    screen.blit(controls_text, (20, HEIGHT - 30))
+    
+    # رسائل اللعبة
+    if game_state == "game_over":
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        screen.blit(overlay, (0, 0))
+        
+        game_over_text = font_large.render("انتهت اللعبة!", True, RED)
+        screen.blit(game_over_text, (WIDTH//2 - game_over_text.get_width()//2, HEIGHT//2 - 60))
+        
+        score_text = font_medium.render(f"النقاط النهائية: {player.score}", True, YELLOW)
+        screen.blit(score_text, (WIDTH//2 - score_text.get_width()//2, HEIGHT//2))
+        
+        restart_text = font_medium.render("اضغط R للعب مرة أخرى", True, GREEN)
+        screen.blit(restart_text, (WIDTH//2 - restart_text.get_width()//2, HEIGHT//2 + 60))
+    
+    elif game_state == "level_complete":
+        if pygame.time.get_ticks() - level_complete_time > 3000:
+            player.level += 1
+            player.x = 100
+            player.y = 300
+            player.health = player.max_health
+            
+            # زيادة صعوبة المستوى التالي
+            for i in range(3):
+                x = random.randint(200, WIDTH - 100)
+                y = random.randint(HEIGHT - 400, HEIGHT - 100)
+                enemies.append(Enemy(x, y, random.choice(["غول", "وحش"])))
+            
+            # إعادة تعيين العملات
+            coins = []
+            for i in range(15):
+                x = random.randint(50, WIDTH - 50)
+                y = random.randint(100, HEIGHT - 150)
+                coins.append(Coin(x, y))
+            
+            game_state = "playing"
+        else:
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
+            screen.blit(overlay, (0, 0))
+            
+            level_text = font_large.render(f"اكتمل المستوى {player.level}!", True, GREEN)
+            screen.blit(level_text, (WIDTH//2 - level_text.get_width()//2, HEIGHT//2 - 30))
+            
+            next_text = font_medium.render("الاستعداد للمستوى التالي...", True, YELLOW)
+            screen.blit(next_text, (WIDTH//2 - next_text.get_width()//2, HEIGHT//2 + 40))
+    
+    # تحديث الشاشة
+    pygame.display.flip()
+    
+    # التحكم في سرعة اللعبة
+    clock.tick(60)
+
+# إنهاء اللعبة
+pygame.quit()
+sys.exit()
